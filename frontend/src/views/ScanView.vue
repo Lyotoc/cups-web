@@ -13,7 +13,6 @@
           icon="i-lucide-refresh-cw"
           class="shrink-0"
           @click="refreshScanners"
-          :loading="refreshing"
         />
       </div>
     </div>
@@ -23,7 +22,7 @@
       <!-- 左栏：扫描设置 -->
       <div class="lg:col-span-3 space-y-4">
         <!-- 扫描仪选择 -->
-        <ScannerSelector v-model="scanner" />
+        <ScannerSelector ref="scannerSelectorRef" v-model="scanner" />
 
         <!-- 扫描参数 -->
         <ScanOptions
@@ -78,9 +77,9 @@ const resolution = ref(300)
 const colorMode = ref('color')
 const paperSize = ref('A4')
 const scanArea = ref('')
+const scannerSelectorRef = ref(null)
 
 const scanning = ref(false)
-const refreshing = ref(false)
 const loadingRecords = ref(false)
 const currentScanJob = ref(null)
 const scanRecords = ref([])
@@ -90,12 +89,8 @@ const canScan = computed(() => {
 })
 
 async function refreshScanners() {
-  refreshing.value = true
-  try {
-    // Scanner list will be refreshed by ScannerSelector component
-    await new Promise(resolve => setTimeout(resolve, 500))
-  } finally {
-    refreshing.value = false
+  if (scannerSelectorRef.value) {
+    scannerSelectorRef.value.refresh()
   }
 }
 
