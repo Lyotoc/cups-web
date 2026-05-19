@@ -1,6 +1,7 @@
 .etc/
 .data
 .uploads
+.scan
 
 bin/
 frontend/dist/

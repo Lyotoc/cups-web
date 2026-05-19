@@ -27,7 +27,9 @@ set -e
 # 添加 `net <ip>` 行，scanimage -L 才能发现设备。
 # 不同后端配置文件名不同（epsonds.conf、epson2.conf、fujitsu.conf 等），
 # 由 config.json 的 backend 字段指定，脚本自动映射到 /etc/sane.d/<backend>.conf。
-# 同时向 /etc/sane.d/net.conf（通用网络后端）追加相同条目，确保兼容性。
+#
+# 注意：/etc/sane.d/net.conf 是 saned 远程 SANE 服务器的配置（格式为裸主机名），
+# 不是网络扫描仪的配置，本脚本不修改该文件。
 
 CONFIG="/scan/config.json"
 # 托管块标记：start 和 end 之间的所有内容均由本脚本管理，清理时整块删除。
@@ -66,11 +68,10 @@ if [ -f "$CONFIG" ] && command -v jq >/dev/null 2>&1; then
     # 去重后端列表
     unique_backends=($(printf '%s\n' "${backends[@]}" | sort -u))
 
-    # 第一步：清除所有相关 conf 文件中的旧托管块
+    # 第一步：清除所有相关后端 conf 文件中的旧托管块
     for backend in "${unique_backends[@]}"; do
       cleanManagedBlocks "/etc/sane.d/${backend}.conf"
     done
-    cleanManagedBlocks "/etc/sane.d/net.conf"
 
     # 第二步：构建托管块内容并写入
     # 所有 net 行集中在一个 start/end 块内，便于管理和清理
@@ -106,13 +107,6 @@ if [ -f "$CONFIG" ] && command -v jq >/dev/null 2>&1; then
           echo "[scan] created $conf with managed block"
         fi
       done
-
-      # 同步写入 net.conf（通用网络后端），确保 scanimage -L 能通过 net 后端发现
-      net_conf="/etc/sane.d/net.conf"
-      if [ -f "$net_conf" ]; then
-        printf '%b' "$block" >> "$net_conf"
-        echo "[scan] wrote managed block to $net_conf"
-      fi
     fi
   else
     echo "[scan] no scanners configured in $CONFIG"
