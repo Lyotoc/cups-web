@@ -12,9 +12,11 @@
 #     也可在构建时 COPY 进镜像作为默认值。
 #   - 扫描仪配置写入 /etc/sane.d/*.conf 需要 root 权限；docker-compose.yml
 #     已设置 user: root，直接 docker run 时需传 --user root。
-#   - 配置写入是原子性的：用标记注释（SCAN_MARKER）标识托管行，每次启动时
-#     先清除所有旧的托管行，再写入当前 config.json 的内容。修改配置后重启
+#   - 配置写入是原子性的：用标记注释（SCAN_MARKER）标识托管块，每次启动时
+#     先清除所有旧的托管块，再写入当前 config.json 的内容。修改配置后重启
 #     容器即可生效，旧配置不会残留。
+#   - SANE 配置解析器不支持行尾注释（# 只在行首有效），因此标记注释必须
+#     独占一行，紧随其后的 net <ip> 行一起构成一个托管块，清理时成对删除。
 #   - 后续如有其他初始化逻辑（环境变量处理、目录准备等），追加到 exec 之前即可。
 
 set -e
@@ -27,19 +29,20 @@ set -e
 # 同时向 /etc/sane.d/net.conf（通用网络后端）追加相同条目，确保兼容性。
 
 CONFIG="/scan/config.json"
-# 标记注释：所有由本脚本写入的行都带此前缀，用于下次启动时精准清除旧配置
+# 标记注释：独占一行，紧随其后的 net <ip> 行构成一个托管块。
+# 清理时用 sed 删除标记行 + 下一行（即 net 行），实现成对移除。
 SCAN_MARKER="# managed by cups-web entrypoint"
 
-# cleanManagedLines <file>
-# 移除指定文件中所有由本脚本托管的行（带 SCAN_MARKER 前缀）。
-# 使用临时文件原子替换，避免 sed -i 在某些文件系统上的问题。
-cleanManagedLines() {
+# cleanManagedBlocks <file>
+# 移除指定文件中所有由本脚本托管的块（标记注释行 + 紧随的 net 行）。
+# sed '/pattern/{N;d}' 匹配标记行后读取下一行（N），然后一起删除（d）。
+cleanManagedBlocks() {
   local file="$1"
   if [ -f "$file" ]; then
     local tmp="${file}.tmp"
-    grep -vF "$SCAN_MARKER" "$file" > "$tmp" 2>/dev/null || true
+    sed '/^# managed by cups-web entrypoint$/{N;d}' "$file" > "$tmp" 2>/dev/null || true
     mv "$tmp" "$file"
-    echo "[scan] cleaned managed lines from $file"
+    echo "[scan] cleaned managed blocks from $file"
   fi
 }
 
@@ -60,11 +63,11 @@ if [ -f "$CONFIG" ] && command -v jq >/dev/null 2>&1; then
     # 去重后端列表
     unique_backends=($(printf '%s\n' "${backends[@]}" | sort -u))
 
-    # 第一步：清除所有相关 conf 文件中的旧托管行
+    # 第一步：清除所有相关 conf 文件中的旧托管块
     for backend in "${unique_backends[@]}"; do
-      cleanManagedLines "/etc/sane.d/${backend}.conf"
+      cleanManagedBlocks "/etc/sane.d/${backend}.conf"
     done
-    cleanManagedLines "/etc/sane.d/net.conf"
+    cleanManagedBlocks "/etc/sane.d/net.conf"
 
     # 第二步：写入当前配置
     for i in $(seq 0 $((count - 1))); do
@@ -79,32 +82,32 @@ if [ -f "$CONFIG" ] && command -v jq >/dev/null 2>&1; then
 
       conf="/etc/sane.d/${backend}.conf"
       net_line="net ${ip}"
-      managed_line="${net_line}  ${SCAN_MARKER}"
 
       # 写入后端配置文件（如 /etc/sane.d/epsonds.conf）
+      # 标记注释独占一行，net 行紧随其后，构成一个托管块
       if [ -f "$conf" ]; then
-        echo "$managed_line" >> "$conf"
+        printf '%s\n%s\n' "$SCAN_MARKER" "$net_line" >> "$conf"
         echo "[scan] appended '$net_line' to $conf"
       else
         # 后端配置文件不存在时主动创建，SANE 仍能识别
         echo "[scan] warning: $conf not found, creating it"
-        echo "$managed_line" > "$conf"
+        printf '%s\n%s\n' "$SCAN_MARKER" "$net_line" > "$conf"
         echo "[scan] created $conf with '$net_line'"
       fi
 
       # 同步写入 net.conf（通用网络后端），确保 scanimage -L 能通过 net 后端发现
       net_conf="/etc/sane.d/net.conf"
       if [ -f "$net_conf" ]; then
-        echo "$managed_line" >> "$net_conf"
+        printf '%s\n%s\n' "$SCAN_MARKER" "$net_line" >> "$net_conf"
         echo "[scan] appended '$net_line' to $net_conf"
       fi
     done
   else
     echo "[scan] no scanners configured in $CONFIG"
-    # 配置为空时也要清理旧的托管行
+    # 配置为空时也要清理旧的托管块
     if [ -d /etc/sane.d ]; then
       for f in /etc/sane.d/*.conf; do
-        cleanManagedLines "$f"
+        cleanManagedBlocks "$f"
       done
     fi
   fi
