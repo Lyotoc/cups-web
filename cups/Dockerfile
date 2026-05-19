@@ -22,6 +22,9 @@ ENV TZ=Asia/Shanghai
 ENV CUPSADMIN=print
 ENV CUPSPASSWORD=print
 
+# 使用阿里云 Debian 镜像源
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
+
 # ────────────────────────────────────────────────────────────────────
 # 第一阶段：apt 安装编译依赖 + 运行时依赖 + cups-filters。
 # ────────────────────────────────────────────────────────────────────

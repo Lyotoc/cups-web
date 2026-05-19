@@ -18,8 +18,8 @@ all: frontend build
 
 frontend:
 	@echo "Building frontend (expects Bun)..."
-	cd $(FRONTEND_DIR) && bun install || true
-	cd $(FRONTEND_DIR) && bunx vite build || bun run build
+	cd $(FRONTEND_DIR) && npm install || true
+	cd $(FRONTEND_DIR) && npx vite build || npm run build
 
 build:
 	@echo "Building Go binary (version=$(VERSION))..."

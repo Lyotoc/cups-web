@@ -10,7 +10,7 @@
 # 会导致 linux/arm/v7 构建直接找不到 manifest。node:20-slim 官方镜像覆盖 amd64/arm32v7/arm64v8，
 # 而 frontend/package.json 里 scripts 全是标准 Vite/Node 命令，完全不依赖 bun 专有 API，
 # 用 npm ci 替换 bun install 即可获得跨三架构的一致构建产物。
-FROM node:20-slim AS frontend-build
+FROM docker.m.daocloud.io/library/node:20-slim AS frontend-build
 WORKDIR /src/frontend
 COPY frontend/package*.json ./
 RUN npm ci --no-audit --no-fund --prefer-offline
@@ -43,11 +43,13 @@ RUN npm run build
 # - 即便某天 GitHub Actions 的 runner 换成 arm64/linux，`BUILDPLATFORM` 也会自动跟随，
 #   那时 amd64 的 runtime 反而要 QEMU 模拟 java-builder——但 amd64 上的 JVM 远比 armhf 稳，
 #   在实践中是可接受的。真正要彻底脱离 QEMU，只能靠 GH Actions 的 multi-runner 矩阵拆分。
-FROM --platform=$BUILDPLATFORM debian:trixie-slim AS java-builder
+FROM --platform=$BUILDPLATFORM docker.m.daocloud.io/library/debian:trixie-slim AS java-builder
 ENV DEBIAN_FRONTEND=noninteractive
 ENV MAVEN_VERSION=3.9.9
 ENV MAVEN_HOME=/opt/maven
 ENV PATH=/opt/maven/bin:$PATH
+# 使用阿里云 Debian 镜像源
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
 # Maven tarball 来源策略：
 # 1) 优先 dlcdn.apache.org（Apache CDN，快）—— 但它只保留 current release，
 #    一旦官方发布 3.9.10+，3.9.9 会立即 404，CI 会挂（exit code 22）。
@@ -70,7 +72,7 @@ RUN mvn dependency:go-offline -q
 COPY ofd-converter/src ./src
 RUN mvn clean package -q -DskipTests
 
-FROM golang:1.26 AS builder
+FROM docker.m.daocloud.io/library/golang:1.26 AS builder
 WORKDIR /src
 
 # 构建期注入版本号（Issue #26）：
@@ -108,7 +110,10 @@ RUN CGO_ENABLED=0 GOOS=linux \
       -ldflags="-s -w -X main.Version=$VERSION" \
       -o /out/cups-web ./cmd/server
 
-FROM debian:trixie-slim AS runtime
+FROM docker.m.daocloud.io/library/debian:trixie-slim AS runtime
+
+# 使用阿里云 Debian 镜像源
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
 
 # Install LibreOffice (headless conversion), Ghostscript, and minimal fonts/certificates
 #
@@ -161,7 +166,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress openjdk-21-jre \
     ghostscript fonts-droid-fallback \
     fonts-dejavu-core fonts-noto-cjk fonts-arphic-uming fonts-arphic-ukai fonts-wqy-zenhei \
-    sane-utils libsane \
+    sane-utils libsane1 \
+    jq \
     ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
@@ -249,6 +255,12 @@ ENV XDG_CACHE_HOME=/home/nonroot/.cache
 
 COPY --from=builder /out/cups-web /cups-web
 COPY --from=java-builder /src/ofd-converter/target/ofd-converter.jar /ofd-converter.jar
+
+# 扫描仪配置：COPY 提供默认值，运行时可通过 volume 挂载 ./scan:/scan 覆盖
+COPY scan/config.json /scan/config.json
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 EXPOSE 8080
 USER nonroot
-ENTRYPOINT ["/cups-web"]
+ENTRYPOINT ["/entrypoint.sh"]
